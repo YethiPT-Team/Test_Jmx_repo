@@ -1,0 +1,118 @@
+pipeline {
+    agent { label 'tenjin-pt-test' }
+ 
+    triggers {
+        pollSCM('H/2 * * * *')
+    }
+ 
+    options {
+        skipDefaultCheckout()
+    }
+ 
+    parameters {
+        string(name: 'TEST_ID', defaultValue: '8952', description: 'Test ID')
+        string(name: 'PROJECT_ID', defaultValue: '2802', description: 'Project ID')
+    }
+ 
+    environment {
+        CLUSTER_ID = "152"
+        CREATED_BY = "admin"
+        CREATED_BY_EMAIL = "admin@gmail.com"
+        SERVER_PORT = "81"
+        SERVER_HOST = "192.168.16.176"
+    }
+ 
+    stages {
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/YethiPT-Team/Test_Jmx_repo.git'
+            }
+        }
+ 
+        stage('Initializing Execution') {
+            steps {
+                script {
+                    def baseUrl = "http://${env.SERVER_HOST}:${env.SERVER_PORT}"
+                    echo "Triggering execution for Test ID: ${params.TEST_ID}"
+ 
+                    def response = sh(
+                        script: """
+                            curl -s -w "%{http_code}" -o response.json -X POST "${baseUrl}/api/execution" \
+                            -H "accept: */*" \
+                            -H "Content-Type: application/json" \
+                            -d '{
+                                "testId": ${params.TEST_ID},
+                                "clusterId": "${env.CLUSTER_ID}",
+                                "projectId": "${params.PROJECT_ID}",
+                                "createdBy": "${env.CREATED_BY}",
+                                "createdByEmail": "${env.CREATED_BY_EMAIL}"
+                            }'
+                        """,
+                        returnStdout: true
+                    ).trim()
+ 
+                    def httpCode = response[-3..-1]
+                    if (httpCode != "200") {
+                        error "Execution API failed with HTTP code: ${httpCode}"
+                    }
+ 
+                    def jsonText = readFile('response.json')
+                    def json = readJSON text: jsonText
+                    env.EXECUTION_ID = json.executionId
+ 
+                    echo "Execution initialized successfully. Execution ID: ${env.EXECUTION_ID}"
+                }
+            }
+        }
+ 
+        stage('Running Execution') {
+            steps {
+                script {
+                    def baseUrl = "http://${env.SERVER_HOST}:${env.SERVER_PORT}"
+                    def executionStatus = "Running"
+ 
+                    timeout(time: 30, unit: 'MINUTES') {
+                        while (executionStatus == "Running") {
+                            sleep time: 10, unit: "SECONDS"
+                            def statusResponse = sh(
+                                script: """curl -s -X GET "${baseUrl}/api/execution/summary?executionId=${env.EXECUTION_ID}" \
+                                           -H "accept: */*" \
+                                           -H "Content-Type: application/json" """,
+                                returnStdout: true
+                            ).trim()
+                            def statusJson = readJSON text: statusResponse
+                            executionStatus = statusJson?.execution?.executionStatus ?: statusJson?.executionStatus ?: "Running"
+                            echo "Current Execution Status: ${executionStatus}"
+                        }
+                    }
+ 
+                    echo "Execution finished with Status: ${executionStatus}"
+                }
+            }
+        }
+ 
+        stage('Preparing Execution Results') {
+            steps {
+                script {
+                    def baseUrl = "http://${env.SERVER_HOST}:${env.SERVER_PORT}"
+                    def zipFile = "execution_${env.EXECUTION_ID}_build_${env.BUILD_NUMBER}.zip"
+ 
+                    echo "Downloading execution results ZIP..."
+                    sh """curl -s -o ${zipFile} "${baseUrl}/api/zip/${env.EXECUTION_ID}" """
+ 
+                    echo "ZIP file downloaded: ${zipFile} (workspace: ${pwd()})"
+                    archiveArtifacts artifacts: zipFile, fingerprint: true
+                }
+            }
+        }
+    }
+ 
+    post {
+        success {
+            echo "Pipeline completed successfully."
+        }
+        failure {
+            echo "Pipeline failed!"
+        }
+    }
+}
