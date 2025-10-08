@@ -5,7 +5,7 @@ pipeline {
         stage('Checkout Code') {
             steps {
                 // Check out the code from your Git repository
-                git url: 'https://github.com/your-org/your-repo.git',
+                git url: 'https://github.com/YethiPT-Team/Test_Jmx_repo/tree/main/jmeter_Jenkin.git',
                     branch: 'main'
             }
         }
